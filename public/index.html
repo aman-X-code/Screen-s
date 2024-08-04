@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Screen Sharing App</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <h1>Screen Sharing App</h1>
+  <input type="text" id="roomId" placeholder="Enter room ID or Generate one">
+  <button id="joinRoom">Join Room</button>
+  <button id="generateRoom">Generate Room ID</button>
+  <p id="roomLink"></p>
+  <video id="video" controls autoplay></video>
+  <button id="shareButton">Share Screen</button>
+
+  <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
+  <script src="/js/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const video = document.getElementById('video');
+    const shareButton = document.getElementById('shareButton');
+    const joinRoomButton = document.getElementById('joinRoom');
+    const generateRoomButton = document.getElementById('generateRoom');
+    const roomIdInput = document.getElementById('roomId');
+    const roomLink = document.getElementById('roomLink');
+    let peerConnection;
+    let localStream;
+
+    const config = {
+      iceServers: [
+        {
+          urls: 'stun:stun.l.google.com:19302'
+        }
+      ]
+    };
+
+    const createPeerConnection = () => {
+      const pc = new RTCPeerConnection(config);
+      
+      pc.onicecandidate = event => {
+        if (event.candidate) {
+          socket.emit('candidate', { candidate: event.candidate, roomId: roomIdInput.value });
+        }
+      };
+
+      pc.ontrack = event => {
+        video.srcObject = event.streams[0];
+      };
+
+      return pc;
+    };
+
+    shareButton.addEventListener('click', async () => {
+      try {
+        localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+        video.srcObject = localStream;
+
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        socket.emit('offer', { offer: offer, roomId: roomIdInput.value });
+      } catch (err) {
+        console.error('Error: ' + err);
+      }
+    });
+
+    joinRoomButton.addEventListener('click', () => {
+      peerConnection = createPeerConnection();
+      socket.emit('join', roomIdInput.value);
+    });
+
+    generateRoomButton.addEventListener('click', () => {
+      const roomId = generateRoomId();
+      roomIdInput.value = roomId;
+      roomLink.innerHTML = `Share this link with your friends: <a href="${window.location.href}?roomId=${roomId}">${window.location.href}?roomId=${roomId}</a>`;
+    });
+
+    const generateRoomId = () => {
+      return 'room-' + Math.random().toString(36).substr(2, 9);
+    };
+
+    socket.on('joined', () => {
+      console.log('Joined room:', roomIdInput.value);
+    });
+
+    socket.on('offer', async (data) => {
+      if (data.roomId === roomIdInput.value) {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        socket.emit('answer', { answer: answer, roomId: roomIdInput.value });
+      }
+    });
+
+    socket.on('answer', async (data) => {
+      if (data.roomId === roomIdInput.value) {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+      }
+    });
+
+    socket.on('candidate', async (data) => {
+      if (data.roomId === roomIdInput.value) {
+        try {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+        } catch (err) {
+          console.error('Error adding received ICE candidate', err);
+        }
+      }
+    });
+
+    // Check if roomId is present in the URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomIdFromUrl = urlParams.get('roomId');
+    if (roomIdFromUrl) {
+      roomIdInput.value = roomIdFromUrl;
+      peerConnection = createPeerConnection();
+      socket.emit('join', roomIdFromUrl);
+    }
+  </script>
+</body>
+</html>
